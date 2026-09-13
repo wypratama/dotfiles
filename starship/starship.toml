@@ -77,9 +77,9 @@ truncation_symbol = "…/"
 
 [directory.substitutions]
 Documents = "󰈙"
-Downloads = " "
-Music = " "
-Pictures = " "
+Downloads = " "
+Music = " "
+Pictures = " "
 
 [fill]
 style = "fg:overlay"
@@ -88,7 +88,7 @@ symbol = " "
 [git_branch]
 format = "[](fg:overlay)[ $symbol $branch ]($style)[](fg:overlay) "
 style = "bg:overlay fg:foam"
-symbol = ""
+symbol = " "
 
 [git_status]
 disabled = false
@@ -129,7 +129,7 @@ error_symbol = '[󱞪](fg:love)'
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [cpp]
 style = "bg:overlay fg:pine"
@@ -141,31 +141,31 @@ symbol = " "
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [elm]
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [golang]
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [haskell]
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [java]
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [kotlin]
 style = "bg:overlay fg:pine"
@@ -177,7 +177,7 @@ symbol = " "
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [lua]
 style = "bg:overlay fg:pine"
@@ -219,13 +219,13 @@ symbol = "󰆥 "
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = "󱘗 "
 
 [scala]
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = " "
+symbol = " "
 
 [docker_context]
 style = "bg:overlay fg:pine"
@@ -237,7 +237,7 @@ symbol = " "
 style = "bg:overlay fg:pine"
 format = " [](fg:overlay)[ $symbol$version ]($style)[](fg:overlay)"
 disabled = false
-symbol = ' '
+symbol = ' '
 
 [conda]
 style = "bg:overlay fg:pine"
@@ -249,4 +249,4 @@ symbol = '🅒 '
 style = "bg:overlay fg:gold"
 format = ' [](fg:overlay)[ $symbol$state( \($name\)) ]($style)[](fg:overlay)'
 disabled = false
-symbol = " "
+symbol = " "
