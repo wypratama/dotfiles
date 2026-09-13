@@ -15,14 +15,41 @@ DEST[starship]="${XDG_CONFIG_HOME:-$HOME/.config}/starship.toml"
 
 apps=(nvim tmux starship)
 
+confirm() {
+  local prompt="$1" auto_yes="$2" reply
+  [ "$auto_yes" = "yes" ] && return 0
+  read -r -p "$prompt [y/N] " reply
+  case "$reply" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 link_app() {
-  local app="$1"
+  local app="$1" auto_yes="${2:-no}"
   local src="${SRC[$app]}" dest="${DEST[$app]}"
   [ -n "$src" ] || { echo "error: unknown app '$app' (expected nvim, tmux, or starship)" >&2; return 1; }
-  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
-    echo "$app: SKIP — $dest exists and is not a symlink" >&2
-    return 1
+
+  if [ -L "$dest" ]; then
+    if [ "$(readlink -m "$dest")" = "$(readlink -m "$src")" ]; then
+      echo "$app: already linked $dest -> $src"
+      return 0
+    fi
+    if ! confirm "$app: $dest is a symlink -> $(readlink "$dest") (not this repo). Replace it?" "$auto_yes"; then
+      echo "$app: SKIP — left existing symlink at $dest" >&2
+      return 1
+    fi
+  elif [ -e "$dest" ]; then
+    if ! confirm "$app: $dest exists and is not a symlink. Back it up to $dest.bak and replace?" "$auto_yes"; then
+      echo "$app: SKIP — left existing file at $dest" >&2
+      return 1
+    fi
+    local backup="$dest.bak"
+    [ -e "$backup" ] && backup="$dest.bak.$(date +%Y%m%d%H%M%S)"
+    mv "$dest" "$backup"
+    echo "$app: backed up existing $dest -> $backup"
   fi
+
   mkdir -p "$(dirname "$dest")"
   ln -sfn "$src" "$dest"
   echo "$app: linked $dest -> $src"
@@ -60,16 +87,17 @@ doctor_app() {
 }
 '''
 
-# Link a dotfile (or all)
-link app='all':
+# Link a dotfile (or all). Pass yes='yes' to auto-confirm overwrites/replacements.
+link app='all' yes='no':
   #!/usr/bin/env bash
   export REPO={{repo}}
   {{bootstrap}}
   app="{{app}}"
+  auto_yes="{{yes}}"
   if [ "$app" = "all" ]; then
-    for a in "${apps[@]}"; do link_app "$a"; done
+    for a in "${apps[@]}"; do link_app "$a" "$auto_yes"; done
   else
-    link_app "$app"
+    link_app "$app" "$auto_yes"
   fi
 
 # Unlink a dotfile (or all)
