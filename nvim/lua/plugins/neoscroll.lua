@@ -1,0 +1,40 @@
+return {
+  {
+    "karb94/neoscroll.nvim",
+    event = "VeryLazy",
+    -- map <C-u>/<C-d>/<C-b>/<C-f> etc. in normal + visual + select modes
+    -- with a smooth sine easing, VSCode-style
+    config = function()
+      local neoscroll = require("neoscroll")
+      neoscroll.setup({
+        mappings = {}, -- handled below with custom durations
+        easing = "sine",
+        hide_cursor = true,
+      })
+      local keymap = {
+        ["<C-u>"] = function()
+          neoscroll.ctrl_u({ duration = 200 })
+        end,
+        ["<C-d>"] = function()
+          neoscroll.ctrl_d({ duration = 200 })
+        end,
+        ["<C-b>"] = function()
+          neoscroll.ctrl_b({ duration = 350 })
+        end,
+        ["<C-f>"] = function()
+          neoscroll.ctrl_f({ duration = 350 })
+        end,
+        ["<C-y>"] = function()
+          neoscroll.scroll(-0.1, { move_cursor = false, duration = 100 })
+        end,
+        ["<C-e>"] = function()
+          neoscroll.scroll(0.1, { move_cursor = false, duration = 100 })
+        end,
+      }
+      local modes = { "n", "v", "x" }
+      for key, func in pairs(keymap) do
+        vim.keymap.set(modes, key, func)
+      end
+    end,
+  },
+}
