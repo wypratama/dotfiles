@@ -5,13 +5,25 @@ repo := justfile_directory()
 bootstrap := '''
 set -euo pipefail
 
-declare -A SRC DEST
-SRC[nvim]="$REPO/nvim"
-DEST[nvim]="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
-SRC[tmux]="$REPO/tmux/.tmux.conf"
-DEST[tmux]="$HOME/.tmux.conf"
-SRC[starship]="$REPO/starship/starship.toml"
-DEST[starship]="${XDG_CONFIG_HOME:-$HOME/.config}/starship.toml"
+# Plain case statements instead of associative arrays: those need bash 4+,
+# which macOS doesn't ship (Apple's stuck on 3.2 for licensing reasons).
+app_src() {
+  case "$1" in
+    nvim) echo "$REPO/nvim" ;;
+    tmux) echo "$REPO/tmux/.tmux.conf" ;;
+    starship) echo "$REPO/starship/starship.toml" ;;
+    *) return 1 ;;
+  esac
+}
+
+app_dest() {
+  case "$1" in
+    nvim) echo "${XDG_CONFIG_HOME:-$HOME/.config}/nvim" ;;
+    tmux) echo "$HOME/.tmux.conf" ;;
+    starship) echo "${XDG_CONFIG_HOME:-$HOME/.config}/starship.toml" ;;
+    *) return 1 ;;
+  esac
+}
 
 apps=(nvim tmux starship)
 
@@ -27,11 +39,12 @@ confirm() {
 
 link_app() {
   local app="$1" auto_yes="${2:-no}"
-  local src="${SRC[$app]}" dest="${DEST[$app]}"
-  [ -n "$src" ] || { echo "error: unknown app '$app' (expected nvim, tmux, or starship)" >&2; return 1; }
+  local src dest
+  src="$(app_src "$app")" || { echo "error: unknown app '$app' (expected nvim, tmux, or starship)" >&2; return 1; }
+  dest="$(app_dest "$app")"
 
   if [ -L "$dest" ]; then
-    if [ "$(readlink -m "$dest")" = "$(readlink -m "$src")" ]; then
+    if [ "$(readlink "$dest")" = "$src" ]; then
       echo "$app: already linked $dest -> $src"
       return 0
     fi
@@ -57,8 +70,8 @@ link_app() {
 
 unlink_app() {
   local app="$1"
-  local dest="${DEST[$app]}"
-  [ -n "$dest" ] || { echo "error: unknown app '$app' (expected nvim, tmux, or starship)" >&2; return 1; }
+  local dest
+  dest="$(app_dest "$app")" || { echo "error: unknown app '$app' (expected nvim, tmux, or starship)" >&2; return 1; }
   if [ -L "$dest" ]; then
     rm "$dest"
     echo "$app: unlinked (removed $dest)"
@@ -71,11 +84,13 @@ unlink_app() {
 
 doctor_app() {
   local app="$1"
-  local src="${SRC[$app]}" dest="${DEST[$app]}"
+  local src dest
+  src="$(app_src "$app")"
+  dest="$(app_dest "$app")"
   printf '%-8s ' "$app"
   if [ ! -e "$src" ]; then
     echo "FAIL  repo file missing: $src"
-  elif [ -L "$dest" ] && [ "$(readlink -m "$dest")" = "$(readlink -m "$src")" ]; then
+  elif [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then
     echo "OK    $dest -> $src"
   elif [ -L "$dest" ]; then
     echo "STALE $dest -> $(readlink "$dest") (target not in dotfiles)"
