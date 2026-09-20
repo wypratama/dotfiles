@@ -44,12 +44,39 @@ vim.keymap.set("n", "<Tab>", main_window_buffers("bnext"), { desc = "Next Buffer
 vim.keymap.set("n", "<S-Tab>", main_window_buffers("bprevious"), { desc = "Previous Buffer" })
 
 Snacks.keymap.set({ "n", "t" }, "<leader>t", function()
-  local terminal = Snacks.terminal.get(nil, {
-    cwd = LazyVim.root(),
-    create = true,
-    win = { relative = "win", height = 0.3, wo = { winbar = "" } },
-  })
+  -- Reuse the existing terminal instead of keying the lookup off
+  -- LazyVim.root(): the old code called Snacks.terminal.get(nil, { cwd =
+  -- LazyVim.root(), ... }) on every press, but the terminal id includes cwd,
+  -- and root() depends on the current buffer (from a terminal buffer it
+  -- resolves differently). So pressing <leader>t from inside the terminal,
+  -- or from a file with a different root, computed a different id and opened
+  -- a brand-new terminal instead of focusing the one you had.
+  local terminal
+  for _, t in ipairs(Snacks.terminal.list()) do
+    if t:buf_valid() then
+      terminal = t
+      break
+    end
+  end
+  if not terminal then
+    local anchor = lazyvim_is_main_window() or vim.api.nvim_get_current_win()
+    terminal = Snacks.terminal.get(nil, {
+      cwd = LazyVim.root(),
+      -- Explicit so it's auditable: defaults to vim.o.shell (/bin/zsh on
+      -- macOS). If you still see bash, the old bash-backed buffer is being
+      -- reused -- wipe it once (see note below) and confirm with
+      -- `:echo &shell` and `echo $0` inside the new terminal.
+      shell = vim.env.SHELL or vim.o.shell,
+      create = true,
+      win = { relative = "win", win = anchor, height = 0.3, wo = { winbar = "" } },
+    })
+  end
   if terminal then
+    -- Toggle: pressing <leader>t while inside the terminal hides it.
+    if vim.api.nvim_get_current_buf() == terminal.buf then
+      terminal:hide()
+      return
+    end
     local main = lazyvim_is_main_window()
     if main and vim.api.nvim_win_is_valid(main) and terminal.opts.win ~= main then
       terminal:close({ buf = false })
