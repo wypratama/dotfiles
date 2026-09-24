@@ -2,7 +2,18 @@
 -- Default keymaps that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/keymaps.lua
 -- Add any additional keymaps here
 
+-- The floating workbench experiment (experiments/floatbench.lua), when ON,
+-- owns the main editor window; package.loaded keeps this free when unused.
+local function floatbench()
+  local fb = package.loaded["experiments.floatbench"]
+  return fb and fb.enabled and fb or nil
+end
+
 local function lazyvim_is_main_window()
+  local fb = floatbench()
+  if fb and fb.editor_win() then
+    return fb.editor_win()
+  end
   local wins = vim.api.nvim_tabpage_list_wins(0)
   local candidates = {}
   for _, w in ipairs(wins) do
@@ -44,6 +55,11 @@ vim.keymap.set("n", "<Tab>", main_window_buffers("bnext"), { desc = "Next Buffer
 vim.keymap.set("n", "<S-Tab>", main_window_buffers("bprevious"), { desc = "Previous Buffer" })
 
 Snacks.keymap.set({ "n", "t" }, "<leader>t", function()
+  local fb = floatbench()
+  if fb then
+    fb.focus("terminal")
+    return
+  end
   -- Reuse the existing terminal instead of keying the lookup off
   -- LazyVim.root(): the old code called Snacks.terminal.get(nil, { cwd =
   -- LazyVim.root(), ... }) on every press, but the terminal id includes cwd,

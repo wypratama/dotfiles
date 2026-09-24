@@ -1,6 +1,14 @@
 local function term_nav(dir)
   ---@param self snacks.terminal
   return function(self)
+    -- Floating workbench: panels are floats, so wincmd can't reach them.
+    local fb = package.loaded["experiments.floatbench"]
+    if fb and fb.enabled then
+      vim.schedule(function()
+        fb.nav(dir)
+      end)
+      return ""
+    end
     return self:is_floating() and "<c-" .. dir .. ">" or vim.schedule(function()
       vim.cmd.wincmd(dir)
     end)
