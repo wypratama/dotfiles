@@ -98,18 +98,19 @@ function M.layout()
   local m, g = cfg.margin, cfg.gap
   local vg = cfg.join_center and 0 or cfg.vgap
 
-  local hide_t, hide_c = S.hidden.terminal, S.hidden.claude
+  local hide_t, hide_c, hide_e = S.hidden.terminal, S.hidden.claude, S.hidden.explorer
   local join = cfg.join_center and not hide_t
 
   -- Hidden panels hand their space to the editor.
-  local left_w = math.max(math.floor(cols * cfg.left_frac), 20)
+  local left_w = hide_e and 0 or math.max(math.floor(cols * cfg.left_frac), 20)
   local right_w = hide_c and 0 or math.max(math.floor(cols * cfg.right_frac), 24)
-  local center_w = cols - left_w - right_w - 2 * m - (hide_c and 1 or 2) * g
+  local lg, rg = hide_e and 0 or g, hide_c and 0 or g
+  local center_w = cols - left_w - right_w - 2 * m - lg - rg
   local full_h = rows - 2 * m
   local editor_h = hide_t and full_h or math.floor((full_h - vg) * cfg.editor_frac)
   local term_h = full_h - editor_h - vg
 
-  local ex_col, ce_col, cl_col = m, m + left_w + g, m + left_w + g + center_w + g
+  local ex_col, ce_col, cl_col = m, m + left_w + lg, m + left_w + lg + center_w + rg
   return {
     cols = cols,
     rows = rows,
@@ -457,6 +458,17 @@ local function refresh_active()
     local whl = explorer_whl(active == "explorer")
     root.opts.wo.winhighlight = whl -- survive Snacks layout updates
     set_whl(root.win, whl)
+    -- The search box border uses the same subtle panel border color.
+    local input = S.explorer.input and S.explorer.input.win
+    if input and input:win_valid() then
+      local merged = Snacks.util.winhl(vim.wo[input.win].winhighlight, { FloatBorder = "FloatbenchBorder" })
+      local parts = {}
+      for k, v in pairs(merged) do
+        parts[#parts + 1] = k .. ":" .. v
+      end
+      input.opts.wo.winhighlight = table.concat(parts, ",")
+      set_whl(input.win, input.opts.wo.winhighlight)
+    end
   end
 end
 
@@ -589,7 +601,8 @@ local function explorer_layout()
       title = " Explorer ",
       title_pos = "left",
       box = "vertical",
-      { win = "input", height = 1, border = "bottom" },
+      -- Search input in its own rounded box, like the stock sidebar layout.
+      { win = "input", height = 1, border = "rounded" },
       { win = "list", border = "none" },
     },
   }
@@ -620,10 +633,24 @@ local function show_explorer()
   S.explorer = Snacks.explorer({
     cwd = LazyVim.root(),
     preview = false,
+    prompt = " / ", -- search-box prompt with a left pad (stock is a ">" chevron)
     focus = false, -- keep focus in the editor on open
     layout = explorer_layout(),
+    -- <Esc> (or q) closes the Snacks explorer: treat it as a hidden panel so
+    -- the editor takes the column; <leader>e / <C-h> bring it back.
+    on_close = function(picker)
+      if M.enabled and S.explorer == picker then
+        S.explorer = nil
+        S.hidden.explorer = true
+        vim.schedule(M.relayout)
+      end
+    end,
     on_show = function(picker)
       S.explorer = S.explorer or picker
+      if S.focus_explorer_on_show then
+        S.focus_explorer_on_show = nil
+        picker:focus("list")
+      end
       pin_explorer_z()
       refresh_active()
     end,
@@ -651,10 +678,16 @@ function M.focus(name)
   end
   if name == "explorer" then
     if not explorer_valid() then
+      if S.hidden.explorer then
+        S.hidden.explorer = nil
+        M.relayout() -- shrink the editor back first
+      end
       if win_valid("editor") then
         vim.api.nvim_set_current_win(S.wins.editor)
       end
+      S.focus_explorer_on_show = true -- a fresh picker shows asynchronously
       show_explorer()
+      return
     end
     pcall(function()
       S.explorer:focus("list")
