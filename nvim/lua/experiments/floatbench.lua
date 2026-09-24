@@ -523,7 +523,7 @@ local function shell_terminal_buf()
   local box = M.layout().terminal
   local t = Snacks.terminal.get(nil, {
     cwd = LazyVim.root(),
-    shell = vim.env.SHELL or vim.o.shell,
+    shell = vim.o.shell, -- login shell, see config/options.lua
     create = true,
     start_insert = false,
     win = {
@@ -851,18 +851,24 @@ end
 
 ---Largest normal split holding a file buffer: its buffer seeds the editor.
 ---@return integer win
+---Never a float or a Snacks layout window: with `nvim .` the only windows
+---are the dashboard split and the startup explorer, and picking the
+---explorer's list (which close_stock_explorers() then kills) made us jump
+---into a dying picker window (Snacks CursorMoved error). Prefers file
+---windows, else the largest normal split (e.g. the dashboard).
 local function base_main_win()
-  local best, area = vim.api.nvim_get_current_win(), -1
+  local best, best_score = nil, -1
   for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local b = vim.api.nvim_win_get_buf(w)
-    if vim.api.nvim_win_get_config(w).relative == "" and not vim.w[w].snacks_layout and vim.bo[b].buftype == "" then
-      local a = vim.api.nvim_win_get_width(w) * vim.api.nvim_win_get_height(w)
-      if a > area then
-        best, area = w, a
+    if vim.api.nvim_win_get_config(w).relative == "" and not vim.w[w].snacks_layout then
+      local area = vim.api.nvim_win_get_width(w) * vim.api.nvim_win_get_height(w)
+      local score = (vim.bo[b].buftype == "" and 1e9 or 0) + area
+      if score > best_score then
+        best, best_score = w, score
       end
     end
   end
-  return best
+  return best or vim.api.nvim_tabpage_list_wins(0)[1]
 end
 
 function M.open()
@@ -880,9 +886,9 @@ function M.open()
   hide_bufferline()
   geo = M.layout() -- the tabline row is free now
 
+  close_stock_explorers() -- before picking the base window (see base_main_win)
   local base = base_main_win()
   S.base_win = base
-  close_stock_explorers()
 
   -- Backdrop covers exactly the content area (tabline/statusline stay).
   local back = S.bufs.backdrop
@@ -905,7 +911,13 @@ function M.open()
   -- Editor hosts the REAL buffer. Enter it while opening so the float
   -- inherits the base window's options (number, signcolumn, ...).
   vim.api.nvim_set_current_win(base)
-  S.wins.editor = vim.api.nvim_open_win(vim.api.nvim_win_get_buf(base), true, win_args(geo.editor, "Editor"))
+  -- No file open (e.g. `nvim .` shows the dashboard): start with an empty
+  -- buffer, like an editor with no file open.
+  local ebuf = vim.api.nvim_win_get_buf(base)
+  if vim.bo[ebuf].buftype ~= "" then
+    ebuf = vim.api.nvim_create_buf(true, false)
+  end
+  S.wins.editor = vim.api.nvim_open_win(ebuf, true, win_args(geo.editor, "Editor"))
   vim.w[S.wins.editor].snacks_main = true
   set_tabs_winbar(S.wins.editor)
   vim.api.nvim_win_set_config(S.wins.editor, win_args(geo.editor, title_for("editor")))

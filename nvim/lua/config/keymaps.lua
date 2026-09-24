@@ -91,7 +91,7 @@ Snacks.keymap.set("n", "<leader>t", function()
       -- macOS). If you still see bash, the old bash-backed buffer is being
       -- reused -- wipe it once (see note below) and confirm with
       -- `:echo &shell` and `echo $0` inside the new terminal.
-      shell = vim.env.SHELL or vim.o.shell,
+      shell = vim.o.shell, -- login shell, see config/options.lua
       create = true,
       win = { relative = "win", win = anchor, height = 0.3, wo = { winbar = "" } },
     })
