@@ -293,6 +293,12 @@ function M.tabline()
     end
   end
 
+  -- No listed buffers (e.g. the editor shows an unlisted scratch/help buffer
+  -- after the last file was closed): just an empty tab row.
+  if #tabs == 0 then
+    return "%#FloatbenchTabFill#"
+  end
+
   -- Too many tabs: keep a window of tabs around the active one.
   local avail = vim.api.nvim_win_get_width(win)
   local first, last = active or 1, active or 1
