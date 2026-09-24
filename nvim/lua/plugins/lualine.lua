@@ -19,12 +19,19 @@ return {
           a = { bg = color, fg = p.base, gui = "bold" },
           b = { bg = p.highlight_high, fg = color },
           c = { bg = fill, fg = p.text },
+          -- right side mirrors the left: transparent -> overlay (x) ->
+          -- highlight_high (y, from b) -> mode color (z, from a)
+          x = { bg = p.overlay, fg = p.text },
         }
       end
+      -- lualine has a separate "terminal" mode (Claude, shell); without it the
+      -- x block falls back to the transparent c colors in terminals.
+      theme.terminal = theme.normal
       theme.inactive = {
         a = { bg = fill, fg = p.muted },
         b = { bg = fill, fg = p.muted },
         c = { bg = fill, fg = p.muted },
+        x = { bg = fill, fg = p.muted },
       }
       opts.options.theme = theme
       opts.options.section_separators = { left = SOLID_R, right = SOLID_L }
@@ -46,6 +53,17 @@ return {
         elseif path_i and i <= path_i then -- diagnostics, filetype, pretty_path
           comp.color = vim.tbl_extend("force", type(comp.color) == "table" and comp.color or {}, { bg = p.overlay })
           comp.separator = i == path_i and { right = SOLID_R } or ""
+        end
+      end
+
+      -- lualine_x (noice, lazy updates, diff, ...) is one overlay block now.
+      -- Its components are conditional and lualine draws no separator at the
+      -- middle split, so each one opens with a colored  instead of the thin
+      -- text-colored chevron; between two x components that arrow is overlay
+      -- on overlay and just reads as a space.
+      for _, comp in ipairs(opts.sections.lualine_x) do
+        if type(comp) == "table" then
+          comp.separator = { left = SOLID_L }
         end
       end
     end,
