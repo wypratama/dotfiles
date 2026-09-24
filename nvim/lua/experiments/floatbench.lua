@@ -92,13 +92,17 @@ local function screen_area()
 end
 
 ---Single layout calculation. Returns outer boxes {row, col, w, h} incl border.
-function M.layout()
+---@param force? table<string, boolean> slots to show even if hidden (diff tab)
+function M.layout(force)
   local cfg = M.config
   local cols, rows, top = screen_area()
   local m, g = cfg.margin, cfg.gap
   local vg = cfg.join_center and 0 or cfg.vgap
 
-  local hide_t, hide_c, hide_e = S.hidden.terminal, S.hidden.claude, S.hidden.explorer
+  force = force or {}
+  local hide_t = S.hidden.terminal and not force.terminal
+  local hide_c = S.hidden.claude and not force.claude
+  local hide_e = S.hidden.explorer and not force.explorer
   local join = cfg.join_center and not hide_t
 
   -- Hidden panels hand their space to the editor.
@@ -661,6 +665,20 @@ local function show_explorer()
       refresh_active()
     end,
   })
+  -- The picker rebuilds its layout on VimResized in whatever tab is current
+  -- (no tab check), which would move the explorer into a Diffview tab. From
+  -- another tab just mark it stale; TabEnter/relayout catches up at home.
+  local picker = S.explorer
+  if picker and picker.set_layout then
+    local set_layout = picker.set_layout
+    picker.set_layout = function(self, ...)
+      if S.tab and vim.api.nvim_get_current_tabpage() ~= S.tab then
+        S.explorer_stale = true
+        return
+      end
+      return set_layout(self, ...)
+    end
+  end
 end
 
 ---Close every stock (non-workbench) explorer, e.g. the sidebar split.
@@ -778,12 +796,24 @@ end
 ---@param dir string
 ---@return string?
 function M.nav_target(dir)
+  local diff = package.loaded["experiments.floatbench_diff"]
+  if diff and diff.owns_tab() then
+    return diff.nav_target(dir)
+  end
   local cur = panel_of(vim.api.nvim_get_current_win()) or "editor"
   local target = (NAV[cur] or {})[dir]
   return target and not S.hidden[target] and target or nil
 end
 
 function M.nav(dir)
+  local diff = package.loaded["experiments.floatbench_diff"]
+  if diff and diff.owns_tab() then
+    local win = diff.nav_target(dir)
+    if win then
+      vim.api.nvim_set_current_win(win)
+    end
+    return
+  end
   local target = M.nav_target(dir)
   if target then
     M.focus(target)
@@ -889,6 +919,7 @@ function M.open()
   close_stock_explorers() -- before picking the base window (see base_main_win)
   local base = base_main_win()
   S.base_win = base
+  S.tab = vim.api.nvim_get_current_tabpage()
 
   -- Backdrop covers exactly the content area (tabline/statusline stay).
   local back = S.bufs.backdrop
@@ -936,6 +967,8 @@ function M.open()
   vim.api.nvim_set_current_win(S.wins.editor)
   vim.cmd.stopinsert()
   shadow_keys()
+  -- Diffview tabs get the same slot layout while the workbench is ON.
+  require("experiments.floatbench_diff").start()
 
   local group = vim.api.nvim_create_augroup(AUG, { clear = true })
   vim.api.nvim_create_autocmd("VimResized", {
@@ -954,7 +987,16 @@ function M.open()
   vim.api.nvim_create_autocmd("OptionSet", {
     group = group,
     pattern = { "showtabline", "laststatus", "cmdheight" },
-    callback = function()
+    callback = function(ev)
+      -- Keep the tabline off while ON: e.g. the Snacks dashboard (nvim .)
+      -- restores its saved showtabline when you leave it, which a Diffview
+      -- tab switch triggers. Remember the value for restore_bufferline().
+      if ev.match == "showtabline" and vim.o.showtabline ~= 0 then
+        if S.saved_tabline then
+          S.saved_tabline.showtabline = vim.o.showtabline
+        end
+        vim.o.showtabline = 0
+      end
       vim.schedule(M.relayout)
     end,
     desc = "Floatbench: relayout when reserved rows change",
@@ -969,6 +1011,15 @@ function M.open()
       end
     end,
     desc = "Floatbench: keep editor tab row",
+  })
+  vim.api.nvim_create_autocmd("TabEnter", {
+    group = group,
+    callback = function()
+      if S.explorer_stale and vim.api.nvim_get_current_tabpage() == S.tab then
+        vim.schedule(M.relayout)
+      end
+    end,
+    desc = "Floatbench: catch up explorer geometry after a resize in another tab",
   })
   vim.api.nvim_create_autocmd("WinEnter", {
     group = group,
@@ -1030,7 +1081,13 @@ function M.relayout()
   end
   -- Snacks layouts deep-copy opts.layout on every update, so mutating the
   -- root box and calling update() resizes the explorer without reopening.
-  if explorer_valid() then
+  -- Only from the workbench's own tab: Snacks (re)shows layout windows in the
+  -- current tabpage, so an update from a Diffview tab would draw the explorer
+  -- there. TabEnter catches up when coming back.
+  if explorer_valid() and vim.api.nvim_get_current_tabpage() ~= S.tab then
+    S.explorer_stale = true
+  elseif explorer_valid() then
+    S.explorer_stale = nil
     local root = S.explorer.layout.opts.layout
     local fresh = explorer_layout().layout
     root.row, root.col, root.width, root.height = fresh.row, fresh.col, fresh.width, fresh.height
@@ -1042,6 +1099,10 @@ end
 function M.close()
   if not M.enabled then
     return
+  end
+  local diff = package.loaded["experiments.floatbench_diff"]
+  if diff then
+    diff.stop() -- closes workbench-styled Diffview tabs
   end
   M.enabled = false
   pcall(vim.api.nvim_del_augroup_by_name, AUG)
@@ -1130,5 +1191,22 @@ function M.status()
   vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "Floatbench" })
   return lines
 end
+
+-- Shared pieces for experiments/floatbench_diff.lua.
+M.ui = {
+  win_args = function(box, title)
+    return win_args(box, title)
+  end,
+  panel_whl = function(active)
+    return panel_whl(active)
+  end,
+  ---Buffer shown in a workbench panel ("terminal", "claude"), if visible.
+  panel_buf = function(name)
+    return win_valid(name) and vim.api.nvim_win_get_buf(S.wins[name]) or nil
+  end,
+  main_tab = function()
+    return S.tab
+  end,
+}
 
 return M
