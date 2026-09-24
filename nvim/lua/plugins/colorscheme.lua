@@ -22,7 +22,13 @@ return {
       groups = {
         border = 'surface'
       },
-      highlight_groups = {},
+      highlight_groups = {
+        -- Terminal-mode cursor (Claude, shell). smear-cursor draws the blue
+        -- cursor in normal/insert mode but not in terminal mode, where the
+        -- Ghostty rose-pine cursor (#555169) is nearly invisible. Match the
+        -- smear color; 'guicursor' t: uses this group (config/options.lua).
+        TermCursor = { fg = "#191724", bg = "#2F7EDB" },
+      },
     },
   },
 

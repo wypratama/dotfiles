@@ -2,8 +2,13 @@ local function term_nav(dir)
   ---@param self snacks.terminal
   return function(self)
     -- Floating workbench: panels are floats, so wincmd can't reach them.
+    -- With no panel in that direction, pass the key through to the program
+    -- (Claude's <C-j> newline, the shell's <C-l> clear, ...).
     local fb = package.loaded["experiments.floatbench"]
     if fb and fb.enabled then
+      if not fb.nav_target(dir) then
+        return "<c-" .. dir .. ">"
+      end
       vim.schedule(function()
         fb.nav(dir)
       end)
@@ -13,6 +18,17 @@ local function term_nav(dir)
       vim.cmd.wincmd(dir)
     end)
   end
+end
+
+-- Hide the terminal window. In the floating workbench the visible panel is a
+-- float owned by experiments/floatbench.lua (Snacks' own window is already
+-- hidden), so hand the hide to the workbench instead.
+local function term_hide(self)
+  local fb = package.loaded["experiments.floatbench"]
+  if fb and fb.enabled and fb.hide_buf(self.buf) then
+    return
+  end
+  self:hide()
 end
 
 return {
@@ -42,8 +58,8 @@ return {
             nav_j = { "<C-j>", term_nav("j"), desc = "Go to Lower Window", expr = true, mode = "t" },
             nav_k = { "<C-k>", term_nav("k"), desc = "Go to Upper Window", expr = true, mode = "t" },
             nav_l = { "<C-l>", term_nav("l"), desc = "Go to Right Window", expr = true, mode = "t" },
-            hide_slash = { "<C-/>", "hide", desc = "Hide Terminal", mode = "t" },
-            hide_underscore = { "<c-_>", "hide", desc = "which_key_ignore", mode = "t" },
+            hide_slash = { "<C-/>", term_hide, desc = "Hide Terminal", mode = { "t", "n" } },
+            hide_underscore = { "<c-_>", term_hide, desc = "which_key_ignore", mode = { "t", "n" } },
           },
         },
       },

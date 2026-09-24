@@ -20,3 +20,8 @@ vim.o.exrc = true
 if vim.env.SSH_TTY and vim.env.TMUX == nil then
   vim.g.clipboard = "osc52"
 end
+
+-- Terminal mode (Claude, shell): steady block colored by TermCursor (see
+-- plugins/colorscheme.lua) instead of the default blinking block in the
+-- terminal's own dim cursor color. Other modes keep the defaults.
+vim.opt.guicursor = "n-v-c-sm:block,i-ci-ve:ver25,r-cr-o:hor20,t:block-TermCursor"

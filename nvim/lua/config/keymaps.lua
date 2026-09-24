@@ -54,7 +54,12 @@ end
 vim.keymap.set("n", "<Tab>", main_window_buffers("bnext"), { desc = "Next Buffer" })
 vim.keymap.set("n", "<S-Tab>", main_window_buffers("bprevious"), { desc = "Previous Buffer" })
 
-Snacks.keymap.set({ "n", "t" }, "<leader>t", function()
+-- <leader>t never closes the terminal: it opens + focuses one when none
+-- exists, otherwise shows it (if hidden) and focuses it. Hide it temporarily
+-- with <C-/> from inside; the process (e.g. a dev server) keeps running.
+-- Normal mode only: a terminal-mode <leader> (Space) mapping hijacks every
+-- "space + t" typed into ANY terminal (e.g. "this" in the Claude prompt).
+Snacks.keymap.set("n", "<leader>t", function()
   local fb = floatbench()
   if fb then
     fb.focus("terminal")
@@ -69,14 +74,18 @@ Snacks.keymap.set({ "n", "t" }, "<leader>t", function()
   -- a brand-new terminal instead of focusing the one you had.
   local terminal
   for _, t in ipairs(Snacks.terminal.list()) do
-    if t:buf_valid() then
+    -- list() also contains claudecode's Claude terminal; never grab that one.
+    local info = vim.b[t.buf].snacks_terminal
+    local is_claude = type(info) == "table" and vim.inspect(info.cmd or ""):lower():find("claude", 1, true)
+    if t:buf_valid() and not is_claude then
       terminal = t
       break
     end
   end
   if not terminal then
     local anchor = lazyvim_is_main_window() or vim.api.nvim_get_current_win()
-    terminal = Snacks.terminal.get(nil, {
+    local created
+    terminal, created = Snacks.terminal.get(nil, {
       cwd = LazyVim.root(),
       -- Explicit so it's auditable: defaults to vim.o.shell (/bin/zsh on
       -- macOS). If you still see bash, the old bash-backed buffer is being
@@ -86,11 +95,15 @@ Snacks.keymap.set({ "n", "t" }, "<leader>t", function()
       create = true,
       win = { relative = "win", win = anchor, height = 0.3, wo = { winbar = "" } },
     })
+    -- get() already opened and focused the new terminal.
+    if created then
+      return
+    end
   end
   if terminal then
-    -- Toggle: pressing <leader>t while inside the terminal hides it.
-    if vim.api.nvim_get_current_buf() == terminal.buf then
-      terminal:hide()
+    -- Already visible: just focus it (never close/reopen, keeps its place).
+    if terminal:win_valid() then
+      terminal:focus()
       return
     end
     local main = lazyvim_is_main_window()

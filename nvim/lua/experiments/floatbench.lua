@@ -46,7 +46,11 @@ M.config = {
   right_frac = 0.22, -- claude width fraction
   editor_frac = 0.75, -- editor share of center height (terminal gets the rest)
   gap = 0, -- cells between the three columns (0 = borders sit flush)
-  vgap = 0, -- cells between editor and terminal
+  vgap = 0, -- cells between editor and terminal (ignored when join_center)
+  -- Editor + terminal share one divider line (├─ Terminal ─┤) instead of two
+  -- stacked borders: a 0-cell vertical gap still reads ~2x wider than the
+  -- column gaps, because cells are about twice as tall as they are wide.
+  join_center = true,
   margin = 0, -- cells around the workbench
   z_backdrop = 5,
   z_panel = 40,
@@ -58,9 +62,15 @@ local S = {
   explorer = nil, -- Snacks picker object
   relayout_timer = nil,
   saved_keys = {}, -- "mode|lhs" -> maparg() dict (or false) shadowed while ON
+  hidden = {}, -- name -> true for hidden side panels (terminal, claude)
 }
 
 local ORDER = { "explorer", "editor", "terminal", "claude" }
+
+-- nvim border order: topleft, top, topright, right, botright, bottom, botleft,
+-- left. "" drops that edge.
+local BORDER_OPEN_BOTTOM = { "╭", "─", "╮", "│", "", "", "", "│" }
+local BORDER_DIVIDER_TOP = { "├", "─", "┤", "│", "╯", "─", "╰", "│" }
 
 local pin_explorer_z -- defined with the explorer helpers below
 
@@ -85,13 +95,18 @@ end
 function M.layout()
   local cfg = M.config
   local cols, rows, top = screen_area()
-  local m, g, vg = cfg.margin, cfg.gap, cfg.vgap
+  local m, g = cfg.margin, cfg.gap
+  local vg = cfg.join_center and 0 or cfg.vgap
 
+  local hide_t, hide_c = S.hidden.terminal, S.hidden.claude
+  local join = cfg.join_center and not hide_t
+
+  -- Hidden panels hand their space to the editor.
   local left_w = math.max(math.floor(cols * cfg.left_frac), 20)
-  local right_w = math.max(math.floor(cols * cfg.right_frac), 24)
-  local center_w = cols - left_w - right_w - 2 * m - 2 * g
+  local right_w = hide_c and 0 or math.max(math.floor(cols * cfg.right_frac), 24)
+  local center_w = cols - left_w - right_w - 2 * m - (hide_c and 1 or 2) * g
   local full_h = rows - 2 * m
-  local editor_h = math.floor((full_h - vg) * cfg.editor_frac)
+  local editor_h = hide_t and full_h or math.floor((full_h - vg) * cfg.editor_frac)
   local term_h = full_h - editor_h - vg
 
   local ex_col, ce_col, cl_col = m, m + left_w + g, m + left_w + g + center_w + g
@@ -100,8 +115,20 @@ function M.layout()
     rows = rows,
     top = top,
     explorer = { row = top + m, col = ex_col, w = left_w, h = full_h },
-    editor = { row = top + m, col = ce_col, w = center_w, h = editor_h },
-    terminal = { row = top + m + editor_h + vg, col = ce_col, w = center_w, h = term_h },
+    editor = {
+      row = top + m,
+      col = ce_col,
+      w = center_w,
+      h = editor_h,
+      border = join and BORDER_OPEN_BOTTOM or nil,
+    },
+    terminal = {
+      row = top + m + editor_h + vg,
+      col = ce_col,
+      w = center_w,
+      h = term_h,
+      border = join and BORDER_DIVIDER_TOP or nil,
+    },
     claude = { row = top + m, col = cl_col, w = right_w, h = full_h },
   }
 end
@@ -110,13 +137,16 @@ end
 ---@param title string
 ---@return table nvim_open_win config (content dims)
 local function win_args(box, title)
+  local border = box.border or "rounded"
+  -- Outer box rows minus the border rows actually drawn (top/bottom edges).
+  local edges = type(border) == "table" and ((border[2] ~= "" and 1 or 0) + (border[6] ~= "" and 1 or 0)) or 2
   return {
     relative = "editor",
     row = box.row,
     col = box.col,
     width = math.max(box.w - 2, 4),
-    height = math.max(box.h - 2, 2),
-    border = "rounded",
+    height = math.max(box.h - edges, 2),
+    border = border,
     title = " " .. title .. " ",
     title_pos = "left",
     focusable = true,
@@ -490,7 +520,16 @@ local function shell_terminal_buf()
       wo = { winbar = "" },
     },
   })
-  return t and t:buf_valid() and t.buf or nil
+  if not (t and t:buf_valid()) then
+    return nil
+  end
+  -- It was created as a float only to avoid a flash before we adopt it; give
+  -- it the stock <leader>t split settings back, so after the workbench is OFF
+  -- <leader>t shows it as the normal bottom split, not a stray float.
+  local o = t.opts
+  o.position, o.relative, o.height, o.width = "bottom", "win", 0.3, 0.4
+  o.win, o.row, o.col, o.border, o.zindex, o.enter = nil, nil, nil, nil, nil, nil
+  return t.buf
 end
 
 ---@return integer? bufnr of the claudecode.nvim terminal
@@ -622,6 +661,9 @@ function M.focus(name)
     end)
     return
   end
+  if S.hidden[name] then
+    M.show(name)
+  end
   if win_valid(name) then
     vim.api.nvim_set_current_win(S.wins[name])
   else
@@ -629,11 +671,81 @@ function M.focus(name)
   end
 end
 
+-- ── Hide / show side panels ──────────────────────────────────────────────
+-- Terminal and Claude can be hidden: the float closes, the editor grows into
+-- the space, and the buffer (and its job) keeps running for the next show.
+
+local HIDEABLE = { terminal = true, claude = true }
+
+---@param name string terminal|claude
+function M.hide(name)
+  if not M.enabled or not HIDEABLE[name] or not win_valid(name) then
+    return
+  end
+  local win = S.wins[name]
+  S.wins[name] = nil -- before closing, so WinClosed doesn't treat it as :q
+  S.hidden[name] = true
+  if vim.api.nvim_get_current_win() == win and win_valid("editor") then
+    vim.api.nvim_set_current_win(S.wins.editor)
+  end
+  pcall(vim.api.nvim_win_close, win, false)
+  M.relayout()
+  refresh_active()
+end
+
+---@param name string terminal|claude
+function M.show(name)
+  if not M.enabled or not HIDEABLE[name] or win_valid(name) then
+    return
+  end
+  S.hidden[name] = nil
+  M.relayout() -- shrink the editor first so the panel has room
+  local buf = name == "terminal" and shell_terminal_buf() or claude_buf() or claude_note_buf()
+  if buf then
+    adopt(name, buf)
+  end
+  refresh_active()
+end
+
+---<leader>t / <leader>ac: show+focus when hidden, hide when already in it,
+---otherwise focus it.
+---@param name string terminal|claude
+function M.toggle_panel(name)
+  if S.hidden[name] or not win_valid(name) then
+    M.focus(name)
+  elseif vim.api.nvim_get_current_win() == S.wins[name] then
+    M.hide(name)
+  else
+    M.focus(name)
+  end
+end
+
+---Hide whichever panel shows `buf` (used by the terminal <C-/> key).
+---@param buf integer
+---@return boolean handled
+function M.hide_buf(buf)
+  for name in pairs(HIDEABLE) do
+    if win_valid(name) and vim.api.nvim_win_get_buf(S.wins[name]) == buf then
+      M.hide(name)
+      return true
+    end
+  end
+  return false
+end
+
 ---Move focus to the grid neighbour in direction h/j/k/l.
 ---@param dir string
-function M.nav(dir)
+---Panel reachable from the current one in direction h/j/k/l, if any.
+---@param dir string
+---@return string?
+function M.nav_target(dir)
   local cur = panel_of(vim.api.nvim_get_current_win()) or "editor"
   local target = (NAV[cur] or {})[dir]
+  return target and not S.hidden[target] and target or nil
+end
+
+function M.nav(dir)
+  local target = M.nav_target(dir)
   if target then
     M.focus(target)
   end
@@ -677,11 +789,12 @@ local function shadow_keys()
       M.focus("explorer")
     end, "focus explorer")
   end
-  for _, lhs in ipairs({ "<leader>ac", "<leader>af" }) do
-    shadow("n", lhs, function()
-      M.focus("claude")
-    end, "focus claude")
-  end
+  shadow("n", "<leader>ac", function()
+    M.toggle_panel("claude")
+  end, "toggle claude")
+  shadow("n", "<leader>af", function()
+    M.focus("claude")
+  end, "focus claude")
 end
 
 local function restore_keys()
@@ -816,10 +929,18 @@ function M.open()
   vim.api.nvim_create_autocmd("WinClosed", {
     group = group,
     callback = function(ev)
-      -- A panel closed from the outside (:q, job exit) tears the whole
-      -- workbench down rather than limping on with a missing panel.
+      -- Terminal/Claude closed from the outside (:q, job exit) just become
+      -- hidden panels; closing the editor tears the whole workbench down.
       local closed = tonumber(ev.match)
-      for _, name in ipairs({ "editor", "terminal", "claude" }) do
+      for _, name in ipairs({ "terminal", "claude" }) do
+        if S.wins[name] == closed then
+          S.wins[name] = nil
+          S.hidden[name] = true
+          vim.schedule(M.relayout)
+          return
+        end
+      end
+      for _, name in ipairs({ "editor" }) do
         if S.wins[name] == closed then
           S.wins[name] = nil
           vim.schedule(function()
@@ -832,7 +953,7 @@ function M.open()
         end
       end
     end,
-    desc = "Floatbench: teardown if a panel is closed manually",
+    desc = "Floatbench: hide closed side panels, teardown if editor closes",
   })
 end
 
@@ -893,6 +1014,7 @@ function M.close()
   end
   restore_keys()
   restore_bufferline()
+  S.hidden = {} -- next open shows every panel again
   local base = S.base_win
   if base and vim.api.nvim_win_is_valid(base) then
     if ebuf and vim.api.nvim_buf_is_valid(ebuf) and vim.bo[ebuf].buftype == "" then
