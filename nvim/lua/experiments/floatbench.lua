@@ -63,7 +63,17 @@ local S = {
   relayout_timer = nil,
   saved_keys = {}, -- "mode|lhs" -> maparg() dict (or false) shadowed while ON
   hidden = {}, -- name -> true for hidden side panels (terminal, claude)
+  ai = "claude", -- which assistant fills the Claude slot: "claude" | "opencode"
 }
+
+---opencode.nvim adapter (experiments/floatbench_opencode.lua), nil if the
+---plugin isn't installed.
+local function OC()
+  if not pcall(require, "opencode.config") then
+    return nil
+  end
+  return require("experiments.floatbench_opencode")
+end
 
 local ORDER = { "explorer", "editor", "terminal", "claude" }
 
@@ -451,6 +461,10 @@ local function panel_of(win)
       end
     end
   end
+  local oc = S.ai == "opencode" and OC()
+  if oc and vim.tbl_contains(oc.windows(), win) then
+    return "claude"
+  end
 end
 
 local function refresh_active()
@@ -555,14 +569,31 @@ local function shell_terminal_buf()
 end
 
 ---@return integer? bufnr of the claudecode.nvim terminal
+---Is the Claude Code CLI installed? (claudecode's terminal_cmd, default
+---"claude"; this config is shared with devices that only have opencode.)
+local function claude_available()
+  local ok, cc = pcall(require, "claudecode")
+  local cmd = ok and cc.state and cc.state.config and cc.state.config.terminal_cmd or "claude"
+  return vim.fn.executable(vim.fn.expand(vim.split(cmd, " ", { trimempty = true })[1] or "claude")) == 1
+end
+
 local function claude_buf()
   local ok, term = pcall(require, "claudecode.terminal")
-  if not ok then
+  if not ok or not claude_available() then
     return nil
   end
   local buf = term.get_active_terminal_bufnr()
   if buf and vim.api.nvim_buf_is_valid(buf) then
-    return buf
+    local job = vim.b[buf].terminal_job_id
+    if job and vim.fn.jobwait({ job }, 0)[1] == -1 then
+      return buf -- still running
+    end
+    -- Claude exited (/exit, "No" at the workspace trust prompt): drop the dead
+    -- terminal so a fresh one starts below.
+    pcall(term.close)
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
   end
   -- Start Claude through claudecode (keeps the IDE/MCP connection), placed
   -- at the claude box so it does not flash as a split first.
@@ -588,11 +619,14 @@ local function claude_note_buf()
   if buf == nil or not vim.api.nvim_buf_is_valid(buf) then
     buf = vim.api.nvim_create_buf(false, true)
     S.bufs.claude_note = buf
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
-      "",
-      "  claudecode.nvim / `claude` CLI unavailable.",
-      "  Fix it, then :FloatbenchToggle twice.",
-    })
+    local lines = { "", "  Claude Code CLI (`claude`) not found." }
+    if pcall(require, "opencode.config") then
+      vim.list_extend(lines, { "", "  <leader>og  open opencode here" })
+    else
+      vim.list_extend(lines, { "", "  Install Claude Code or opencode, then", "  :FloatbenchToggle twice." })
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
   end
   return buf
 end
@@ -676,7 +710,21 @@ local function show_explorer()
         S.explorer_stale = true
         return
       end
-      return set_layout(self, ...)
+      -- Rebuild from the editor window: new layout windows briefly show the
+      -- current buffer, and if that is opencode's prompt, opencode.nvim's
+      -- duplicate-window guard (buf_fix_win) closes them and steals focus.
+      local args = { ... }
+      if win_valid("editor") and vim.api.nvim_get_current_win() ~= S.wins.editor then
+        local cur = vim.api.nvim_get_current_win()
+        local ret = vim.api.nvim_win_call(S.wins.editor, function()
+          return set_layout(self, unpack(args))
+        end)
+        if vim.api.nvim_win_is_valid(cur) then
+          vim.api.nvim_set_current_win(cur)
+        end
+        return ret
+      end
+      return set_layout(self, unpack(args))
     end
   end
 end
@@ -718,6 +766,11 @@ function M.focus(name)
     end)
     return
   end
+  local oc = OC()
+  if name == "claude" and S.ai == "opencode" and oc and oc.visible() then
+    vim.api.nvim_set_current_win(oc.focus_win())
+    return
+  end
   if S.hidden[name] then
     M.show(name)
   end
@@ -728,6 +781,41 @@ function M.focus(name)
   end
 end
 
+---Switch which assistant fills the Claude slot. The other one keeps running:
+---Claude's terminal buffer stays alive, opencode's session is only hidden.
+---@param which "claude"|"opencode"
+function M.use_ai(which)
+  local oc = OC()
+  if which == "opencode" then
+    S.ai = "opencode"
+    S.hidden.claude = nil -- opencode needs the column
+    if win_valid("claude") then
+      local win = S.wins.claude
+      S.wins.claude = nil -- before closing, so WinClosed doesn't mark it hidden
+      pcall(vim.api.nvim_win_close, win, false)
+    end
+    M.relayout()
+  else
+    S.ai = "claude"
+    if oc then
+      oc.hide()
+    end
+    if not claude_available() then
+      S.hidden.claude = true
+      vim.notify("Claude Code CLI (`claude`) not found", vim.log.levels.WARN)
+    elseif not win_valid("claude") then
+      S.hidden.claude = nil
+      M.relayout() -- make room first
+      local buf = claude_buf()
+      if buf then
+        adopt("claude", buf)
+      end
+    end
+    M.relayout()
+  end
+  refresh_active()
+end
+
 -- ── Hide / show side panels ──────────────────────────────────────────────
 -- Terminal and Claude can be hidden: the float closes, the editor grows into
 -- the space, and the buffer (and its job) keeps running for the next show.
@@ -736,6 +824,11 @@ local HIDEABLE = { terminal = true, claude = true }
 
 ---@param name string terminal|claude
 function M.hide(name)
+  local oc = OC()
+  if name == "claude" and S.ai == "opencode" and oc then
+    oc.hide() -- WinClosed hands the slot back to Claude, then hide that
+    S.ai = "claude"
+  end
   if not M.enabled or not HIDEABLE[name] or not win_valid(name) then
     return
   end
@@ -752,6 +845,12 @@ end
 
 ---@param name string terminal|claude
 function M.show(name)
+  if name == "claude" and not claude_available() then
+    return vim.notify("Claude Code CLI (`claude`) not found", vim.log.levels.WARN)
+  end
+  if name == "claude" and S.ai == "opencode" then
+    return M.use_ai("claude")
+  end
   if not M.enabled or not HIDEABLE[name] or win_valid(name) then
     return
   end
@@ -859,9 +958,25 @@ local function shadow_keys()
     end, "focus explorer")
   end
   shadow("n", "<leader>ac", function()
-    M.toggle_panel("claude")
+    if not claude_available() then
+      return vim.notify("Claude Code CLI (`claude`) not found", vim.log.levels.WARN)
+    end
+    if S.ai == "opencode" then
+      M.use_ai("claude")
+      return M.focus("claude")
+    end
+    if win_valid("claude") then
+      return M.hide("claude") -- shown: hide it, Claude keeps running
+    end
+    M.focus("claude") -- hidden: show (start) and focus
   end, "toggle claude")
   shadow("n", "<leader>af", function()
+    if not claude_available() then
+      return vim.notify("Claude Code CLI (`claude`) not found", vim.log.levels.WARN)
+    end
+    if S.ai == "opencode" then
+      M.use_ai("claude")
+    end
     M.focus("claude")
   end, "focus claude")
 end
@@ -942,17 +1057,23 @@ function M.open()
   -- Editor hosts the REAL buffer. Enter it while opening so the float
   -- inherits the base window's options (number, signcolumn, ...).
   vim.api.nvim_set_current_win(base)
-  -- No file open (e.g. `nvim .` shows the dashboard): start with an empty
-  -- buffer, like an editor with no file open.
+  -- No file open (dashboard from `nvim .`, or an untouched [No Name]): show
+  -- the welcome art (experiments/floatbench_welcome.lua) instead; opening a
+  -- file replaces it. An untouched [No Name] is unlisted so it has no tab.
+  local welcome = require("experiments.floatbench_welcome")
   local ebuf = vim.api.nvim_win_get_buf(base)
-  if vim.bo[ebuf].buftype ~= "" then
-    ebuf = vim.api.nvim_create_buf(true, false)
+  if vim.bo[ebuf].buftype ~= "" or welcome.is_empty(ebuf) then
+    if welcome.is_empty(ebuf) then
+      vim.bo[ebuf].buflisted = false
+    end
+    ebuf = welcome.buf()
   end
   S.wins.editor = vim.api.nvim_open_win(ebuf, true, win_args(geo.editor, "Editor"))
   vim.w[S.wins.editor].snacks_main = true
   set_tabs_winbar(S.wins.editor)
   vim.api.nvim_win_set_config(S.wins.editor, win_args(geo.editor, title_for("editor")))
   set_whl(S.wins.editor, panel_whl(true))
+  welcome.render(S.wins.editor)
 
   -- Explorer before the other panels: Snacks stacks new layouts above any
   -- existing float (Snacks.win.zindex), so opening it now keeps it at z=40.
@@ -962,7 +1083,27 @@ function M.open()
   if tbuf then
     adopt("terminal", tbuf)
   end
-  adopt("claude", claude_buf() or claude_note_buf())
+  -- The assistant slot starts hidden (the editor spans to the right edge) and
+  -- nothing is started: <leader>ac opens Claude, <leader>og opens opencode.
+  -- An assistant that is already running (e.g. opened before the workbench)
+  -- is shown right away.
+  S.ai = "claude"
+  S.hidden.claude = true
+  local oc = OC()
+  if oc then
+    oc.apply(M.layout({ claude = true }).claude)
+  end
+  if oc and oc.visible() then
+    M.use_ai("opencode")
+  else
+    local ok, term = pcall(require, "claudecode.terminal")
+    local running = ok and term.get_active_terminal_bufnr()
+    if running and vim.api.nvim_buf_is_valid(running) then
+      S.hidden.claude = nil
+      adopt("claude", running)
+    end
+  end
+  M.relayout() -- panels were sized before the slot was hidden
 
   vim.api.nvim_set_current_win(S.wins.editor)
   vim.cmd.stopinsert()
@@ -974,12 +1115,24 @@ function M.open()
   vim.api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = function()
+      -- Keep focus across the resize: a stray split can steal it during the
+      -- resize (with opencode in the slot, opencode.nvim's duplicate-window
+      -- guard closes it and focus falls to the editor). S.last_win is only
+      -- updated by WinEnter, which that split never fires.
+      S.resize_focus = S.resize_focus or S.last_win
       if S.relayout_timer then
         vim.fn.timer_stop(S.relayout_timer)
       end
       S.relayout_timer = vim.fn.timer_start(50, function()
         S.relayout_timer = nil
-        vim.schedule(M.relayout)
+        vim.schedule(function()
+          M.relayout()
+          local win = S.resize_focus
+          S.resize_focus = nil
+          if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() ~= win then
+            pcall(vim.api.nvim_set_current_win, win)
+          end
+        end)
       end)
     end,
     desc = "Floatbench: relayout after resize",
@@ -1021,9 +1174,64 @@ function M.open()
     end,
     desc = "Floatbench: catch up explorer geometry after a resize in another tab",
   })
+  vim.api.nvim_create_autocmd("TermClose", {
+    group = group,
+    callback = function(ev)
+      if win_valid("claude") and vim.api.nvim_win_get_buf(S.wins.claude) == ev.buf then
+        vim.schedule(function()
+          if M.enabled then
+            M.hide("claude") -- slot hides, the editor widens back
+          end
+        end)
+      end
+    end,
+    desc = "Floatbench: Claude exited -> hide its slot",
+  })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(ev)
+      -- Something replaced the Claude terminal in its slot (claudecode wipes
+      -- the buffer on exit and Neovim fills the window with an empty
+      -- [No Name]): hide the slot and drop that stray buffer.
+      if
+        win_valid("claude")
+        and ev.buf == vim.api.nvim_win_get_buf(S.wins.claude)
+        and vim.bo[ev.buf].buftype ~= "terminal"
+      then
+        local stray = ev.buf
+        vim.schedule(function()
+          if M.enabled and win_valid("claude") then
+            M.hide("claude")
+          end
+          if require("experiments.floatbench_welcome").is_empty(stray) and #vim.fn.win_findbuf(stray) == 0 then
+            pcall(vim.api.nvim_buf_delete, stray, {})
+          end
+        end)
+        return
+      end
+    end,
+    desc = "Floatbench: non-terminal buffer in the Claude slot -> hide it",
+  })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(ev)
+      local oc = OC()
+      if oc and S.ai ~= "opencode" and oc.is_oc_buf(ev.buf) then
+        vim.schedule(function()
+          if M.enabled and oc.visible() then
+            M.use_ai("opencode")
+          end
+        end)
+      end
+    end,
+    desc = "Floatbench: opencode opened -> it takes the Claude slot",
+  })
   vim.api.nvim_create_autocmd("WinEnter", {
     group = group,
     callback = function()
+      if not S.resize_focus then
+        S.last_win = vim.api.nvim_get_current_win()
+      end
       vim.schedule(refresh_active)
     end,
     desc = "Floatbench: highlight focused panel",
@@ -1034,6 +1242,20 @@ function M.open()
       -- Terminal/Claude closed from the outside (:q, job exit) just become
       -- hidden panels; closing the editor tears the whole workbench down.
       local closed = tonumber(ev.match)
+      if S.ai == "opencode" then
+        vim.schedule(function()
+          local oc = OC()
+          if M.enabled and S.ai == "opencode" and not (oc and oc.visible()) then
+            -- opencode closed (<Esc>): hide the slot, the editor widens back
+            S.ai = "claude"
+            if not win_valid("claude") then
+              S.hidden.claude = true
+            end
+            M.relayout()
+            refresh_active()
+          end
+        end)
+      end
       for _, name in ipairs({ "terminal", "claude" }) do
         if S.wins[name] == closed then
           S.wins[name] = nil
@@ -1065,6 +1287,10 @@ function M.relayout()
     return
   end
   local geo = M.layout()
+  vim.schedule(function()
+    -- re-center the welcome art (no-op unless the editor shows it)
+    require("experiments.floatbench_welcome").render(S.wins.editor)
+  end)
   if win_valid("backdrop") then
     vim.api.nvim_win_set_config(S.wins.backdrop, {
       relative = "editor",
@@ -1078,6 +1304,12 @@ function M.relayout()
     if win_valid(name) then
       vim.api.nvim_win_set_config(S.wins[name], win_args(geo[name], title_for(name)))
     end
+  end
+  local oc = OC()
+  if oc then
+    -- the slot's box as if shown, so opencode opens at the right size even
+    -- while the slot is hidden (use_ai then makes room for it)
+    oc.apply(M.layout({ claude = true }).claude)
   end
   -- Snacks layouts deep-copy opts.layout on every update, so mutating the
   -- root box and calling update() resizes the explorer without reopening.
@@ -1104,6 +1336,11 @@ function M.close()
   if diff then
     diff.stop() -- closes workbench-styled Diffview tabs
   end
+  local oc = OC()
+  if oc then
+    oc.restore()
+  end
+  S.ai = "claude"
   M.enabled = false
   pcall(vim.api.nvim_del_augroup_by_name, AUG)
   if S.relayout_timer then
