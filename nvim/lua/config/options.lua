@@ -20,3 +20,17 @@ vim.o.exrc = true
 if vim.env.SSH_TTY and vim.env.TMUX == nil then
   vim.g.clipboard = "osc52"
 end
+
+-- Terminal mode (Claude, shell): steady block colored by TermCursor (see
+-- plugins/colorscheme.lua) instead of the default blinking block in the
+-- terminal's own dim cursor color. Other modes keep the defaults.
+vim.opt.guicursor = "n-v-c-sm:block,i-ci-ve:ver25,r-cr-o:hor20,t:block-TermCursor"
+
+-- Always use the login shell (zsh) for :terminal, Snacks terminals and :!,
+-- not $SHELL: `nix-shell` overrides $SHELL with its bash, so terminals
+-- opened from nvim inside a nix-shell started bash instead of zsh. The login
+-- shell still inherits the nix-shell environment (PATH etc.).
+local login_shell = (vim.uv or vim.loop).os_get_passwd().shell
+if login_shell and vim.fn.executable(login_shell) == 1 then
+  vim.o.shell = login_shell
+end
