@@ -9,36 +9,22 @@ return {
   --   * eslint config present              -> eslint_d formats
   --   * both present                       -> both run (eslint --fix first, then prettier)
   --   * neither present                    -> no formatter on save
+  -- (config file names: config/web_format.lua; eslint_d is started early by
+  -- plugin/eslint_d_warm.lua so the first save doesn't time out)
   -- This prevents prettier overriding eslint-only projects and vice-versa.
+  -- LSP formatting (vue_ls/vtsls) is never used for these filetypes: with
+  -- LazyVim's default lsp_format = "fallback", a missing eslint_d (or a
+  -- project with no config) silently reformatted files in the LSP's own style.
+  {
+    "mason-org/mason.nvim",
+    opts = { ensure_installed = { "eslint_d" } },
+  },
   {
     "stevearc/conform.nvim",
     optional = true,
     opts = function(_, opts)
-      local prettier_configs = {
-        ".prettierrc",
-        ".prettierrc.json",
-        ".prettierrc.js",
-        ".prettierrc.cjs",
-        ".prettierrc.mjs",
-        ".prettierrc.yaml",
-        ".prettierrc.yml",
-        ".prettierrc.toml",
-        "prettier.config.js",
-        "prettier.config.cjs",
-        "prettier.config.mjs",
-      }
-
-      local eslint_configs = {
-        ".eslintrc",
-        ".eslintrc.js",
-        ".eslintrc.cjs",
-        ".eslintrc.json",
-        ".eslintrc.yaml",
-        ".eslintrc.yml",
-        "eslint.config.js",
-        "eslint.config.cjs",
-        "eslint.config.mjs",
-      }
+      local web = require("config.web_format")
+      local prettier_configs, eslint_configs = web.prettier_configs, web.eslint_configs
 
       local function has_config(ctx, names, pkg_key)
         local found = vim.fs.find(names, { path = ctx.filename, upward = true })
@@ -97,6 +83,7 @@ return {
         if not vim.tbl_contains(list, "prettier") then
           table.insert(list, "prettier")
         end
+        list.lsp_format = "never"
       end
     end,
   },
