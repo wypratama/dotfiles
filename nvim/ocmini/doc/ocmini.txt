@@ -1,0 +1,143 @@
+*ocmini.txt*  OpenCode v2 inside Neovim                      *ocmini*
+
+Commands                                                    *ocmini-commands*
+
+:Opencode                  Toggle the assistant panel.
+:Opencode input            Focus the composer.
+:Opencode output           Focus the transcript.
+:Opencode new              Start a conversation.
+:Opencode sessions         Search and switch conversations.
+:Opencode {action} [args]   Run an action listed below.
+:'<,'>Opencode quick        Ask about the selected text.
+
+The same actions are available from the searchable / picker in the composer.
+Server-defined slash commands are fetched dynamically and accept arguments.
+
+Chat/context: /history /context /selection /questions /quick /image /editor
+Models:       /models /agents /variant /favorites
+Sessions:     /new /sessions /rename /delete /fork /timeline /tabs /parent
+              /children /compact /export /status
+Review:       /diff /diffall /revert /revertall /snapshots /undo /redo
+Output:       /tools /reasoning /mcp /help
+
+/rename New title           Rename without an additional input dialog.
+/image /path/to/image.png   Attach an image. With no path, paste the clipboard.
+/export /path/session.md    Export the current transcript as Markdown.
+/quick Explain this         Send a quick question with the staged editor context.
+
+The plugin supports OpenCode v2, including its form API. It is a native Neovim
+frontend and does not embed the OpenCode terminal UI. Terminal-only actions are
+not automatically available merely because a command starts with /.
+
+Composer shortcuts                                         *ocmini-input*
+
+Enter                      Send the prompt.
+Shift-Enter                Insert a newline.
+Ctrl-Enter / Alt-Enter      Newline fallbacks when supported by the terminal.
+Ctrl-S                     Alternative send shortcut.
+Ctrl-C                     Interrupt the current turn.
+Ctrl-P / Ctrl-N            Recall previous/next prompts; restore the draft.
+@                          Complete a file or agent name.
+Ctrl-X Ctrl-O              Complete the current @mention or /command.
+#                          Choose editor-context sources.
+Alt-V                      Paste an image from the clipboard.
+
+Ctrl-J remains available for pane navigation. Modified Enter keys depend on
+your terminal's keyboard protocol. Clipboard images need wl-paste or xclip;
+/image accepts an existing PNG, JPEG, WebP, or GIF without those tools.
+
+<leader>oy in visual mode stages the selected text and opens the composer.
+<leader>o/ opens quick chat (normal or visual mode).
+
+Structured questions appear in selection/input dialogs. Escape keeps a request
+pending: /questions can answer or reject it later. Multiple-choice questions,
+custom answers, boolean/numeric fields, and conditional fields are supported.
+External authentication forms offer a link and remain pending for the browser.
+
+Context                                                     *ocmini-context*
+
+Normal chat prompts include the last editor file and its warning/error
+diagnostics. Unsaved contents are included up to the configured line limit.
+Visual selections are staged explicitly. Use # or /context to disable a source,
+clear the selection, or disable context entirely. Git-diff context is off by
+default. Explicit file/image attachments survive context-management actions.
+
+Example configuration: >lua
+  require('ocmini').setup({
+    context = {
+      enabled = true,
+      current_file = true,
+      selection = true,
+      diagnostics = true,
+      git_diff = false,
+      max_lines = 300,
+    },
+  })
+<
+
+Sessions and output                                         *ocmini-sessions*
+
+Opened conversations appear as numbered tabs in the panel title. /tabs selects
+one; ]t and [t in the transcript cycle through them. Each session retains its
+own composer draft and attachments during the Neovim session. The active
+conversation is remembered across restarts; open tabs/drafts are in memory.
+
+/timeline offers navigation, a fork before a selected user message, and undo
+at that message. /undo and /redo delegate reversible conversation/file changes
+to OpenCode. Wait for a running turn or interrupt it before reverting.
+
+The title and composer footer show the model (and its variant in the composer).
+The composer defaults to seven editable rows, plus its two border rows; set
+input.height to change the total height. The output footer shows the agent, approximate active
+context tokens, and accumulated cost. /status shows full details. The context
+estimate uses the latest assistant usage, not an exact tokenizer measurement.
+
+Enter in the transcript offers tool/reasoning expansion. /tools and /reasoning
+also toggle them while idle. [[ and ]] move between user-message headers; i
+focuses the composer. gf opens a readable file under the cursor in a new tab.
+
+Diffs and restore points                                    *ocmini-diff*
+
+/diff reviews the latest turn; /diffall reviews the session's turn range. The
+viewer opens in a normal Neovim tab:
+
+]f / [f       Next/previous file.
+gr            Revert the current file's reviewed patch.
+gR            Revert all reviewed patches.
+gf            Open the current file.
+q             Close the review tab.
+
+/revert and /revertall offer the corresponding file operations directly. They
+require an applicable reverse patch and refuse unsaved buffer changes, paths
+outside the workspace, and symlink paths. Original contents are saved before
+writing. /snapshots restores a local revert point only if the files have not
+changed since that revert. These restore points apply to the plugin's file
+revert actions; OpenCode's /undo uses its own reversible session state.
+
+History, favorites, and restore points are stored under stdpath('state')/ocmini
+with private file permissions. data_dir may override that directory. Restore
+points can contain full original file contents.
+
+Existing server                                             *ocmini-server*
+
+By default the plugin starts/reuses a private local server. To connect to an
+existing v2 server instead: >lua
+  require('ocmini').setup({
+    server = {
+      url = 'http://127.0.0.1:4096',
+      -- username/password fall back to OPENCODE_SERVER_* environment variables.
+    },
+  })
+<
+The plugin does not stop an external server. File attachments use local file
+URIs, so the server must have access to the same paths; container path mapping
+is not implemented.
+
+Custom integration                                          *ocmini-hooks*
+
+prompt_guard is an optional function returning true to allow model requests.
+Management actions remain available when it returns false. hooks supports
+on_session_loaded, on_done_thinking, and on_permission_requested callbacks.
+The User event OcminiEvent exposes the decoded server event as callback data.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

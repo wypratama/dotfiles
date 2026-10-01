@@ -66,10 +66,18 @@ local S = {
   ai = "claude", -- which assistant fills the Claude slot: "claude" | "opencode"
 }
 
----opencode.nvim adapter (experiments/floatbench_opencode.lua), nil if the
----plugin isn't installed.
+---Is the local ocmini plugin present? (nvim/ocmini ships in this repo, so the
+---directory is the check — ocmini itself is lazy-loaded off :Opencode, which
+---means `require` is not a reliable availability probe.)
+---@return boolean
+local function has_ocmini()
+  return (vim.uv or vim.loop).fs_stat(vim.fn.stdpath("config") .. "/ocmini") ~= nil
+end
+
+---ocmini adapter (experiments/floatbench_opencode.lua), nil if the plugin
+---isn't installed.
 local function OC()
-  if not pcall(require, "opencode.config") then
+  if not has_ocmini() then
     return nil
   end
   return require("experiments.floatbench_opencode")
@@ -620,7 +628,7 @@ local function claude_note_buf()
     buf = vim.api.nvim_create_buf(false, true)
     S.bufs.claude_note = buf
     local lines = { "", "  Claude Code CLI (`claude`) not found." }
-    if pcall(require, "opencode.config") then
+    if has_ocmini() then
       vim.list_extend(lines, { "", "  <leader>og  open opencode here" })
     else
       vim.list_extend(lines, { "", "  Install Claude Code or opencode, then", "  :FloatbenchToggle twice." })
@@ -711,8 +719,9 @@ local function show_explorer()
         return
       end
       -- Rebuild from the editor window: new layout windows briefly show the
-      -- current buffer, and if that is opencode's prompt, opencode.nvim's
-      -- duplicate-window guard (buf_fix_win) closes them and steals focus.
+      -- current buffer, which can otherwise be the assistant prompt and pull
+      -- focus. (This was required by opencode.nvim's duplicate-window guard;
+      -- ocmini has no such guard, so it is now just cheap insurance.)
       local args = { ... }
       if win_valid("editor") and vim.api.nvim_get_current_win() ~= S.wins.editor then
         local cur = vim.api.nvim_get_current_win()
@@ -1116,9 +1125,9 @@ function M.open()
     group = group,
     callback = function()
       -- Keep focus across the resize: a stray split can steal it during the
-      -- resize (with opencode in the slot, opencode.nvim's duplicate-window
-      -- guard closes it and focus falls to the editor). S.last_win is only
-      -- updated by WinEnter, which that split never fires.
+      -- resize. (This was needed for opencode.nvim's duplicate-window guard;
+      -- ocmini has none, so it is now just cheap insurance.) S.last_win is only
+      -- updated by WinEnter, which a split created mid-resize never fires.
       S.resize_focus = S.resize_focus or S.last_win
       if S.relayout_timer then
         vim.fn.timer_stop(S.relayout_timer)

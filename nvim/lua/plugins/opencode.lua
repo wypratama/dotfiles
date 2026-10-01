@@ -1,65 +1,87 @@
--- opencode.nvim: native Neovim UI for the opencode CLI (output + input
--- windows). While the floating workbench is ON it takes the Claude slot
--- (experiments/floatbench.lua): whichever assistant was opened last shows
--- there. Default keys: <leader>og toggle, <leader>oi input, <leader>oo output.
--- opencode.nvim keeps OpenCode v2 support on its "v2" branch; pick the
--- branch from the installed CLI's major version (per device, since this
--- config is shared). `opencode --version` (~40ms) only runs when the binary
--- changed: the answer is cached keyed on its path/size/mtime. No CLI ->
--- default branch.
-local function opencode_branch()
-  local exe = vim.fn.exepath("opencode")
-  if exe == "" then
-    return nil
-  end
-  local stat = (vim.uv or vim.loop).fs_stat(exe)
-  local key = exe .. ":" .. (stat and (stat.size .. ":" .. stat.mtime.sec) or "?")
-  local cache = vim.fn.stdpath("cache") .. "/opencode-cli-version"
-
-  local ok, lines = pcall(vim.fn.readfile, cache)
-  local version = ok and lines[1] == key and lines[2] or nil
-  if not version then
-    local res = vim.system({ exe, "--version" }, { text = true }):wait(3000)
-    version = res.code == 0 and (res.stdout or ""):match("(%d+%.%d+%.?%d*)") or nil
-    if version then
-      pcall(vim.fn.writefile, { key, version }, cache)
-    end
-  end
-
-  local major = tonumber(version and version:match("^(%d+)"))
-  return major and major >= 2 and "v2" or nil
-end
-
+-- ocmini: a minimal Neovim front end for the opencode CLI.
+--
+-- It lives in this repo (nvim/ocmini) and is registered with lazy.nvim as a local
+-- `dir` plugin, so there is nothing to clone, no lock entry and no install step.
+-- It talks to a private `opencode serve` over loopback HTTP, so it works with
+-- whatever opencode CLI you have installed rather than being pinned to a branch
+-- that has to match.
+--
+-- While the floating workbench is ON it takes the right-hand assistant slot
+-- (experiments/floatbench.lua): whichever assistant was opened last shows there.
+--
+-- Commands: :Opencode [open|hide|close|input|output|new|sessions|model|agent|mention|interrupt|status]
 return {
   {
-    "sudo-tee/opencode.nvim",
-    branch = opencode_branch(),
+    dir = vim.fn.stdpath("config") .. "/ocmini",
+    name = "ocmini",
+    lazy = true,
     cmd = { "Opencode" },
     keys = {
-      { "<leader>o", "", desc = "+opencode", mode = { "n", "v" } },
+      {
+        "<leader>og",
+        function()
+          require("ocmini").toggle()
+        end,
+        mode = { "n", "v" },
+        desc = "Toggle opencode panel",
+      },
+      {
+        "<leader>oi",
+        function()
+          require("ocmini").input()
+        end,
+        mode = { "n", "v" },
+        desc = "Opencode prompt input",
+      },
+      {
+        "<leader>oo",
+        function()
+          require("ocmini").output()
+        end,
+        mode = { "n", "v" },
+        desc = "Opencode transcript output",
+      },
+      {
+        "<leader>oy",
+        function()
+          require("ocmini.context").select()
+          require("ocmini").input()
+        end,
+        mode = "x",
+        desc = "Attach selection to OpenCode",
+      },
+      {
+        "<leader>o/",
+        function()
+          if vim.fn.mode():match("[vV]") or vim.fn.mode() == "\22" then require("ocmini.context").select() end
+          require("ocmini").input()
+          vim.schedule(function() require("ocmini.actions").run("quick") end)
+        end,
+        mode = { "n", "x" },
+        desc = "OpenCode quick chat",
+      },
     },
-    event = "VeryLazy",
+    -- snacks.nvim backs the model/agent/session pickers; render-markdown renders
+    -- the transcript buffer (see the filetype spec below).
     dependencies = {
       "MeanderingProgrammer/render-markdown.nvim",
-      "saghen/blink.cmp",
       "folke/snacks.nvim",
     },
     opts = {},
     config = function(_, opts)
-      require("opencode").setup(opts)
+      require("ocmini").setup(opts)
     end,
   },
 
-  -- Render opencode's output buffer as markdown too (the existing
-  -- plugins/render-markdown.lua config is kept; this only adds the filetype).
+  -- Render the transcript buffer as markdown.
   {
     "MeanderingProgrammer/render-markdown.nvim",
     ft = { "opencode_output" },
     opts = function(_, opts)
       opts.file_types = opts.file_types or { "markdown", "norg", "rmd", "org", "codecompanion" }
       table.insert(opts.file_types, "opencode_output")
-      -- opencode.nvim recommends no anti-conceal for its output; limit that
-      -- to its buffers so editing markdown files is unchanged.
+      -- opencode's own output is not markdown-concealed; limit that to its buffer
+      -- so editing real markdown files is unchanged.
       opts.overrides = opts.overrides or {}
       opts.overrides.filetype = opts.overrides.filetype or {}
       opts.overrides.filetype.opencode_output = { anti_conceal = { enabled = false } }

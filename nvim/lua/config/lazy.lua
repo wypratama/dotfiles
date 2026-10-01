@@ -27,6 +27,10 @@ require("lazy").setup({
     -- import/override with your plugins
     { import = "plugins" },
   },
+  -- This link is slow and drops long-lived connections after ~9-10 minutes
+  -- (a full opencode.nvim clone died at 553s, 31 bytes short). Raise lazy's
+  -- 120s git default as a safety margin for the other plugins.
+  git = { timeout = 600 },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
     -- If you know what you're doing, you can set this to `true` to have all your custom plugins lazy-loaded by default.
